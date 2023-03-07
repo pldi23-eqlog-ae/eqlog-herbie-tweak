@@ -1,0 +1,131 @@
+use crate::ast::*;
+use crate::Symbol;
+
+grammar;
+
+extern {
+    type Error = String;
+}
+
+// lexer
+match {
+    r"\s*" => { }, // skip whitespace
+    r";[^\n\r]*[\n\r]*" => { }, // skip ; comments
+    r"Int|int|I64|number" => reserved,
+    _
+}
+
+pub Program: Vec<Command> = { (Command)* => <> }
+
+List<T>: Vec<T> = { 
+    "(" <T*> ")" => <>,
+}
+
+Comma<T>: Vec<T> = {
+    <mut v:(<T> ",")*> <e:T?> => match e {
+        None => v,
+        Some(e) => {
+            v.push(e);
+            v
+        }
+    }
+};
+
+Command: Command = {
+    "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
+    "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (<>),
+    "(" "function" <name:Ident> <schema:Schema> <cost:Cost>
+        <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {
+        Command::Function(FunctionDecl { name, schema, merge, default, cost })
+    },
+    "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(FunctionDecl::relation(name, types)),
+    "(" "rule" <body:List<Fact>> <head:List<Action>> ")" => Command::Rule(Rule { head, body }),
+    "(" "rewrite" <lhs:Expr> <rhs:Expr>
+        <conditions:(":when" <List<Fact>>)?>
+    ")" => Command::Rewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
+    "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
+    <NonDefineAction> => Command::Action(<>),
+    "(" "run" <UNum> ")" => Command::Run(<>),
+    "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
+    "(" "check" <Fact> ")" => Command::Check(<>),
+    "(" "clear-rules" ")" => Command::ClearRules,
+    "(" "add-ruleset" <name:Ident> ")" => Command::AddRuleset(name),
+    "(" "load-ruleset" <name:Ident> ")" => Command::LoadRuleset(name),
+    "(" "clear" ")" => Command::Clear,
+    "(" "query" <List<Fact>> ")" => Command::Query(<>),
+    "(" "push" <UNum?> ")" => Command::Push(<>.unwrap_or(1)),
+    "(" "pop" <UNum?> ")" => Command::Pop(<>.unwrap_or(1)),
+    "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
+    "(" "print-size" <sym:Ident> ")" => Command::PrintSize(sym),
+    "(" "input" <name:Ident> <file:String> ")" => Command::Input { name, file },
+}
+
+Cost: Option<usize> = {
+    ":cost" <UNum> => Some(<>),
+    => None,
+}
+
+NonDefineAction: Action = {
+    "(" "set" "(" <f: Ident> <args:Expr*> ")" <v:Expr> ")" => Action::Set ( f, args, v ),
+    "(" "delete" "(" <f: Ident> <args:Expr*> ")" ")" => Action::Delete ( f, args),
+    "(" "union" <e1:Expr> <e2:Expr> ")" => Action::Union(<>),
+    "(" "panic" <msg:String> ")" => Action::Panic(msg),
+    <e:CallExpr> => Action::Expr(e),
+}
+
+Action: Action = {
+    "(" "define" <name:Ident> <expr:Expr> ")" => Action::Define(name, expr),
+    <NonDefineAction> => <>,
+}
+
+Name: Symbol = { "[" <Ident> "]" => <> }
+
+Fact: Fact = {
+    "(" "=" <mut es:Expr+> <e:Expr> ")" => {
+        es.push(e);
+        Fact::Eq(es)
+    },
+    <Expr> => Fact::Fact(<>),
+}
+
+Schema: Schema = {
+    <types:List<Type>> <output:Type> => Schema { input: types, output }
+}
+
+Expr: Expr = {
+    <Literal> => Expr::Lit(<>),
+    <Ident> => Expr::Var(<>),
+    <CallExpr> => <>,
+    "(" <head:PrimitiveSymbol> <tail:(Expr)+> ")" => Expr::Call(head, tail),
+};
+
+Literal: Literal = {
+    // "(" ")" => Literal::Unit, // shouldn't need unit literals for now
+    <Num> => Literal::Int(<>),
+    <SymString> => Literal::String(<>),
+}
+
+CallExpr: Expr = {
+    "(" <head:Ident> <tail:(Expr)*> ")" => Expr::Call(head, tail),
+}
+
+ExprList: Vec<Expr> = { "(" <sexps:(Expr)*> ")" => sexps }
+
+Variant: Variant = {
+    "(" <name:Ident> <types:(Type)*> <cost:Cost> ")" => Variant { <> },
+}
+
+Type: Symbol = <Ident>;
+
+Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
+UNum: usize = {
+    <Num> => <>.try_into().unwrap(),
+}
+Bool: bool = {
+    "true" => true,
+    "false" => false,
+}
+Ident: Symbol = <s:r"[[:alpha:]][\w-]*"> => s.parse().unwrap();
+PrimitiveSymbol: Symbol = <r"[-+*/!=<>&|^/%]+"> => Symbol::from(<>);
+SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>.trim_matches('"'));
+String: String = <r#""[^"]*""#> => (<>).trim_matches('"').to_owned();

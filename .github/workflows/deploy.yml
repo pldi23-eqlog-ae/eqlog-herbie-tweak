@@ -1,0 +1,35 @@
+name: Deploy Web Demo
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        persist-credentials: false
+
+    - name: Install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+    - name: Cache
+      uses: Swatinem/rust-cache@v1
+
+    - name: Build
+      run: make web
+      
+    - name: Prepare for Deployment
+      run: |
+        tree target/www
+        find -name .gitignore -delete  # ignored files are wonky to deploy
+
+    - name: Deploy
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: target/www
+        force_orphan: true
